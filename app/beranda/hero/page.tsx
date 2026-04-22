@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
+import toast, { Toaster } from "react-hot-toast";
 import Image from "next/image";
 
 interface HeroData {
@@ -9,15 +10,17 @@ interface HeroData {
 }
 
 export default function HeroManager() {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [hero, setHero] = useState({
     hero_title: "",
     hero_subtitle: "",
     hero_image_url: "",
   });
   const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Fetch data hero secara stabil
+  // Ambil data hero secara real-time
   const fetchHero = useCallback(async (isMounted: boolean) => {
     const { data } = await supabase
       .from("site_settings")
@@ -50,15 +53,31 @@ export default function HeroManager() {
     };
   }, [fetchHero]);
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0];
+    if (selected) {
+      if (selected.size > 5 * 1024 * 1024)
+        return toast.error("Ukuran banner maksimal 5MB!");
+      setFile(selected);
+      setPreview(URL.createObjectURL(selected));
+    }
+  };
+
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    const saveToast = toast.loading("Mensinkronisasi data hero...");
 
     try {
       let finalImageUrl = hero.hero_image_url;
+      let oldImageToDelete: string | null = null;
 
-      // 1. Jika ada file baru, upload dulu
+      // 1. Jika ada file baru, siapkan penghapusan foto lama
       if (file) {
+        if (hero.hero_image_url) {
+          oldImageToDelete = hero.hero_image_url.split("/").pop() || null;
+        }
+
         const fileName = `${Date.now()}-${file.name}`;
         const { error: uploadError } = await supabase.storage
           .from("hero")
@@ -71,14 +90,14 @@ export default function HeroManager() {
         finalImageUrl = publicUrl;
       }
 
-      // 2. Update semua text & image url ke site_settings
+      // 2. Update database secara kolektif
       const updates = [
         { key: "hero_title", val: hero.hero_title },
         { key: "hero_subtitle", val: hero.hero_subtitle },
         { key: "hero_image_url", val: finalImageUrl },
       ];
 
-      const responses = await Promise.all(
+      await Promise.all(
         updates.map((u) =>
           supabase
             .from("site_settings")
@@ -87,33 +106,36 @@ export default function HeroManager() {
         ),
       );
 
-      if (responses.some((r) => r.error))
-        throw new Error("Gagal update database");
+      // 3. Hapus file lama dari storage jika update database berhasil
+      if (oldImageToDelete) {
+        await supabase.storage.from("hero").remove([oldImageToDelete]);
+      }
 
+      // 4. Reset Form
       setFile(null);
-      const fileInput = document.getElementById(
-        "fileInput",
-      ) as HTMLInputElement;
-      if (fileInput) fileInput.value = "";
+      setPreview(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
 
       await fetchHero(true);
-      alert("Tampilan Beranda Berhasil Diperbarui!");
+      toast.success("Tampilan Beranda Berhasil Diperbarui!", { id: saveToast });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Terjadi kesalahan";
-      alert("Error: " + msg);
+      toast.error("Error: " + msg, { id: saveToast });
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="max-w-5xl space-y-10">
+    <div className="max-w-6xl mx-auto space-y-10 py-10 px-4">
+      <Toaster position="top-right" />
+
       <div className="border-b-2 border-slate-100 pb-8">
         <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">
-          Pengaturan Hero
+          Manajemen Banner Hero
         </h1>
         <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2">
-          Kelola Banner Utama dan Sambutan Beranda
+          Konfigurasi visual dan narasi sambutan pada halaman utama
         </p>
       </div>
 
@@ -121,27 +143,27 @@ export default function HeroManager() {
         onSubmit={handleUpdate}
         className="grid grid-cols-1 lg:grid-cols-2 gap-10"
       >
-        {/* Kolom Kiri: Input Teks */}
-        <div className="bg-white p-10 rounded-[3rem] border-2 border-slate-50 shadow-sm space-y-8">
+        {/* Kolom Kiri: Konfigurasi Narasi */}
+        <div className="bg-white p-10 rounded-[3rem] border-2 border-slate-100 shadow-sm space-y-8">
           <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">
-            Konten Teks
+            Konfigurasi Narasi
           </h3>
 
           <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 px-1">
+            <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 px-1 tracking-widest">
               Judul Utama (H1)
             </label>
             <textarea
               value={hero.hero_title}
               onChange={(e) => setHero({ ...hero, hero_title: e.target.value })}
-              className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-3xl outline-none focus:border-blue-500 font-bold text-lg h-32 transition-all"
+              className="w-full p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] outline-none focus:border-blue-500 font-bold text-lg h-40 transition-all leading-relaxed"
               placeholder="Masukkan judul banner..."
               required
             />
           </div>
 
           <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 px-1">
+            <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 px-1 tracking-widest">
               Sub-Judul / Slogan
             </label>
             <textarea
@@ -149,61 +171,59 @@ export default function HeroManager() {
               onChange={(e) =>
                 setHero({ ...hero, hero_subtitle: e.target.value })
               }
-              className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-3xl outline-none focus:border-blue-500 font-bold h-32 transition-all"
-              placeholder="Masukkan slogan singkat..."
+              className="w-full p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] outline-none focus:border-blue-500 font-bold h-40 transition-all leading-relaxed"
+              placeholder="Masukkan narasi pendukung..."
               required
             />
           </div>
         </div>
 
-        {/* Kolom Kanan: Visual & Upload */}
+        {/* Kolom Kanan: Media Visual */}
         <div className="space-y-6">
-          <div className="bg-white p-8 rounded-[3rem] border-2 border-slate-50 shadow-sm space-y-6">
+          <div className="bg-white p-8 rounded-[3rem] border-2 border-slate-100 shadow-sm space-y-6">
             <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">
-              Banner Utama
+              Media Visual Utama
             </h3>
 
-            {/* Preview Banner Saat Ini */}
-            <div className="relative w-full h-48 bg-slate-100 rounded-[2rem] overflow-hidden border-2 border-slate-50">
-              {hero.hero_image_url ? (
+            {/* Preview Banner */}
+            <div className="relative w-full h-64 bg-slate-100 rounded-[2.5rem] overflow-hidden border-2 border-slate-50 group">
+              {preview || hero.hero_image_url ? (
                 <Image
-                  src={hero.hero_image_url}
+                  src={preview || hero.hero_image_url}
                   alt="Hero Preview"
                   fill
-                  className="object-cover"
+                  className="object-cover transition-transform duration-700 group-hover:scale-105"
                   unoptimized
                 />
               ) : (
                 <div className="flex items-center justify-center h-full text-slate-300 font-bold uppercase text-[10px]">
-                  No Image Preview
+                  Tidak Ada Media
                 </div>
               )}
             </div>
 
             <div>
-              <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 px-1">
-                Ganti Foto Banner
+              <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 px-1 tracking-widest">
+                Unggah Media Baru
               </label>
               <input
-                id="fileInput"
+                ref={fileInputRef}
                 type="file"
                 accept="image/*"
-                onChange={(e) =>
-                  setFile(e.target.files ? e.target.files[0] : null)
-                }
-                className="w-full p-4 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl font-bold text-xs"
+                onChange={handleFileChange}
+                className="w-full p-4 bg-slate-50 border-2 border-dashed border-slate-200 rounded-[1.5rem] font-bold text-xs cursor-pointer"
               />
-              <p className="text-[9px] text-slate-400 mt-2 px-1">
-                * Disarankan ukuran 1920x1080px untuk hasil terbaik.
+              <p className="text-[9px] font-bold text-slate-400 mt-3 px-1 uppercase tracking-tighter">
+                * Rekomendasi: 1920x1080 piksel (Maks. 5MB)
               </p>
             </div>
           </div>
 
           <button
             disabled={loading}
-            className="w-full bg-slate-900 text-white py-6 rounded-3xl font-black text-sm uppercase tracking-[0.2em] hover:bg-blue-600 transition-all shadow-xl active:scale-95 disabled:opacity-50"
+            className="w-full bg-slate-900 text-white py-7 rounded-[2rem] font-black text-sm uppercase tracking-[0.2em] hover:bg-blue-600 transition-all shadow-xl active:scale-95 disabled:opacity-50"
           >
-            {loading ? "Menyimpan Perubahan..." : "Simpan Pengaturan Hero"}
+            {loading ? "Menyinkronkan..." : "Simpan Konfigurasi Hero"}
           </button>
         </div>
       </form>

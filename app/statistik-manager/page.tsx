@@ -5,40 +5,59 @@ import { supabase } from "@/lib/supabase";
 interface StatItem {
   setting_key: string;
   setting_value: string;
+  updated_at: string;
 }
+
+const UNIT_MULTIPLIERS: Record<string, number> = {
+  "": 1,
+  Ribu: 1000,
+  Juta: 1000000,
+  Miliar: 1000000000,
+  Triliun: 1000000000000,
+};
 
 export default function StatistikManager() {
   const [stats, setStats] = useState({
-    total_anggota: "0",
-    total_aset: "0",
-    total_shu: "0",
+    total_anggota: { val: "", unit: "" },
+    total_aset: { val: "", unit: "" },
+    total_shu: { val: "", unit: "" },
   });
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Memoize fungsi fetch
   const fetchStats = useCallback(async (isMounted: boolean) => {
     const { data } = await supabase
       .from("site_settings")
-      .select("setting_key, setting_value")
+      .select("setting_key, setting_value, updated_at")
       .in("setting_key", ["total_anggota", "total_aset", "total_shu"]);
 
     if (isMounted && data) {
       const items = data as StatItem[];
       setStats({
-        total_anggota:
-          items.find((i) => i.setting_key === "total_anggota")?.setting_value ||
-          "0",
-        total_aset:
-          items.find((i) => i.setting_key === "total_aset")?.setting_value ||
-          "0",
-        total_shu:
-          items.find((i) => i.setting_key === "total_shu")?.setting_value ||
-          "0",
+        total_anggota: {
+          val:
+            items.find((i) => i.setting_key === "total_anggota")
+              ?.setting_value || "0",
+          unit: "",
+        },
+        total_aset: {
+          val:
+            items.find((i) => i.setting_key === "total_aset")?.setting_value ||
+            "0",
+          unit: "",
+        },
+        total_shu: {
+          val:
+            items.find((i) => i.setting_key === "total_shu")?.setting_value ||
+            "0",
+          unit: "",
+        },
       });
+      // Ambil waktu update dari salah satu row (asumsi diupdate bersamaan)
+      if (items.length > 0) setLastUpdate(items[0].updated_at);
     }
   }, []);
 
-  // PERBAIKAN: Gunakan IIFE + await untuk menenangkan linter
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -54,81 +73,134 @@ export default function StatistikManager() {
     setLoading(true);
 
     const keys = ["total_anggota", "total_aset", "total_shu"] as const;
-
-    // Perbaikan: Cek status error pada setiap hasil Promise
     const responses = await Promise.all(
-      keys.map((key) =>
-        supabase
+      keys.map((key) => {
+        const numericVal =
+          parseFloat(stats[key].val.replace(/[^0-9.]/g, "")) || 0;
+        const multiplier = UNIT_MULTIPLIERS[stats[key].unit];
+        const finalValue = (numericVal * multiplier).toString();
+
+        return supabase
           .from("site_settings")
-          .update({ setting_value: stats[key] })
-          .eq("setting_key", key),
-      ),
+          .update({
+            setting_value: finalValue,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("setting_key", key);
+      }),
     );
 
-    const hasError = responses.some((res) => res.error);
-
-    if (hasError) {
-      alert("Gagal memperbarui beberapa data statistik");
+    if (responses.some((res) => res.error)) {
+      alert("Terjadi kesalahan sistem saat sinkronisasi data.");
     } else {
-      alert("Statistik berhasil diperbarui!");
+      alert("Data statistik berhasil diperbarui secara sistem.");
+      fetchStats(true);
     }
     setLoading(false);
   };
 
   return (
-    <div className="max-w-6xl space-y-10">
-      <div className="border-b-2 border-slate-100 pb-8">
-        <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">
-          Statistik Koperasi
-        </h1>
-        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2">
-          Update Data Angka Capaian Secara Real-Time
-        </p>
+    <div className="max-w-5xl mx-auto py-10 px-4 space-y-10">
+      {/* Header Selaras dengan Sidebar */}
+      <div className="border-l-4 border-blue-600 pl-6 flex justify-between items-end">
+        <div>
+          <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tight">
+            Manajemen Statistik Koperasi
+          </h1>
+          <p className="text-sm font-medium text-slate-500 mt-2">
+            Pembaruan angka capaian strategis dengan sistem konversi otomatis.
+          </p>
+        </div>
+        {lastUpdate && (
+          <div className="text-right hidden md:block">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+              Terakhir Diperbarui
+            </p>
+            <p className="text-xs font-bold text-slate-600">
+              {new Date(lastUpdate).toLocaleString("id-ID")}
+            </p>
+          </div>
+        )}
       </div>
 
-      <form
-        onSubmit={handleUpdate}
-        className="bg-white p-10 rounded-[3rem] border-2 border-slate-100 shadow-sm space-y-8"
-      >
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {(["total_anggota", "total_aset", "total_shu"] as const).map(
-            (key) => (
-              <div key={key}>
-                <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 px-1 tracking-widest">
-                  {key.replace("_", " ")}
-                </label>
-                <input
-                  type="text"
-                  value={stats[key]}
-                  onChange={(e) =>
-                    setStats({ ...stats, [key]: e.target.value })
-                  }
-                  className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-3xl outline-none focus:border-blue-500 font-black text-2xl transition-all"
-                />
-              </div>
-            ),
-          )}
-        </div>
+      <form onSubmit={handleUpdate} className="space-y-6">
+        {(["total_anggota", "total_aset", "total_shu"] as const).map((key) => {
+          const multiplier = UNIT_MULTIPLIERS[stats[key].unit];
+          const previewVal = (parseFloat(stats[key].val) || 0) * multiplier;
 
-        <div className="pt-6 border-t border-slate-100">
+          return (
+            <div
+              key={key}
+              className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm hover:border-blue-100 transition-all"
+            >
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-4 px-1">
+                {key.replace("total_", "Indikator ").replace("_", " ")}
+              </label>
+
+              <div className="flex flex-col md:flex-row gap-4 items-center">
+                <div className="relative flex-1 w-full">
+                  <input
+                    type="text"
+                    value={stats[key].val}
+                    onChange={(e) =>
+                      setStats({
+                        ...stats,
+                        [key]: { ...stats[key], val: e.target.value },
+                      })
+                    }
+                    className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-blue-500 font-black text-2xl transition-all"
+                    placeholder="0"
+                  />
+                  <div className="absolute right-6 top-1/2 -translate-y-1/2 text-slate-300 font-bold text-xs uppercase">
+                    Nilai
+                  </div>
+                </div>
+
+                <div className="relative w-full md:w-56">
+                  <select
+                    value={stats[key].unit}
+                    onChange={(e) =>
+                      setStats({
+                        ...stats,
+                        [key]: { ...stats[key], unit: e.target.value },
+                      })
+                    }
+                    className="w-full p-5 bg-slate-100 border-2 border-slate-200 rounded-2xl font-bold text-sm appearance-none outline-none focus:border-blue-500 cursor-pointer"
+                  >
+                    {Object.keys(UNIT_MULTIPLIERS).map((u) => (
+                      <option key={u} value={u}>
+                        {u || "Satuan Dasar"}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                    ▼
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Hasil Konversi */}
+              <div className="mt-4 flex items-center gap-3 bg-blue-50/50 w-fit px-4 py-2 rounded-full border border-blue-100/50">
+                <span className="text-[9px] font-black text-blue-400 uppercase tracking-widest">
+                  Hasil Konversi:
+                </span>
+                <span className="text-sm font-black text-blue-600 tracking-tight">
+                  {previewVal.toLocaleString("id-ID")}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+
+        <div className="pt-4">
           <button
             disabled={loading}
-            className="w-full md:w-fit px-12 bg-slate-900 text-white py-5 rounded-2xl font-black text-sm uppercase tracking-[0.2em] hover:bg-blue-600 transition-all shadow-xl active:scale-95 disabled:opacity-50"
+            className="w-full bg-slate-900 text-white py-6 rounded-[2rem] font-black text-sm uppercase tracking-[0.2em] hover:bg-blue-600 transition-all shadow-xl active:scale-95 disabled:opacity-50"
           >
-            {loading ? "Menyimpan..." : "Simpan Statistik"}
+            {loading ? "Menyimpan Perubahan..." : "Sinkronisasi Data Statistik"}
           </button>
         </div>
       </form>
-
-      <div className="bg-blue-50 p-6 rounded-[2rem] border border-blue-100 flex gap-4 items-center">
-        <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold">
-          !
-        </div>
-        <p className="text-xs font-bold text-blue-800 leading-relaxed">
-          Anggota Terdaftar akan langsung memperbarui angka pada Dashboard
-          Utama. Pastikan input hanya berupa angka tanpa titik atau koma.
-        </p>
-      </div>
     </div>
   );
 }

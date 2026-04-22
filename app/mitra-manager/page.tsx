@@ -1,9 +1,11 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react"; // 1. Tambahkan useRef
 import { supabase } from "@/lib/supabase";
+import toast, { Toaster } from "react-hot-toast";
+import PartnerCard from "@/components/PartnerCard";
+import PartnerSkeleton from "@/components/PartnerSkeleton";
 import Image from "next/image";
 
-// Definisi tipe data agar tidak ada error 'any'
 interface Partner {
   id: number;
   name: string;
@@ -11,200 +13,268 @@ interface Partner {
 }
 
 export default function MitraManager() {
+  // 2. Inisialisasi Ref untuk mengontrol elemen input file secara manual
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [partners, setPartners] = useState<Partner[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [editingPartner, setEditingPartner] = useState<Partner | null>(null);
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(true);
 
-  // Memoize fungsi fetch agar stabil
   const fetchPartners = useCallback(async (isMounted: boolean) => {
     const { data } = await supabase
       .from("partners")
       .select("*")
-      .order("id", { ascending: true });
-
+      .order("id", { ascending: false });
     if (isMounted && data) {
       setPartners(data as Partner[]);
+      setFetching(false);
     }
   }, []);
 
-  // PERBAIKAN: Gunakan IIFE + await untuk menenangkan linter
   useEffect(() => {
     let isMounted = true;
-
     (async () => {
       await fetchPartners(isMounted);
     })();
-
     return () => {
       isMounted = false;
     };
   }, [fetchPartners]);
 
-  const handleAddPartner = async (e: React.FormEvent) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0];
+    if (!selected) return;
+    if (selected.size > 2 * 1024 * 1024) {
+      toast.error("Ukuran file maksimal 2MB!");
+      if (fileInputRef.current) fileInputRef.current.value = ""; // Reset jika gagal validasi
+      return;
+    }
+    setFile(selected);
+    setPreview(URL.createObjectURL(selected));
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file) return alert("Pilih logo mitra dulu!");
     setLoading(true);
+    const saveToast = toast.loading("Sedang memproses data...");
 
     try {
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${Math.random()}.${fileExt}`;
-      const { error: uploadError } = await supabase.storage
-        .from("partners")
-        .upload(fileName, file);
-      if (uploadError) throw uploadError;
+      let finalUrl = preview;
+      let oldFileToDelete: string | null = null;
 
-      const {
-        data: { publicUrl },
-      } = supabase.storage.from("partners").getPublicUrl(fileName);
-      const { error: insertError } = await supabase
-        .from("partners")
-        .insert([{ name, logo_url: publicUrl }]);
-      if (insertError) throw insertError;
+      if (editingPartner && file) {
+        oldFileToDelete = editingPartner.logo_url.split("/").pop() || null;
+      }
 
+      if (file) {
+        const fileName = `${Math.random()}.${file.name.split(".").pop()}`;
+        await supabase.storage.from("partners").upload(fileName, file);
+        finalUrl = supabase.storage.from("partners").getPublicUrl(fileName)
+          .data.publicUrl;
+      }
+
+      if (editingPartner) {
+        await supabase
+          .from("partners")
+          .update({ name, logo_url: finalUrl })
+          .eq("id", editingPartner.id);
+        if (oldFileToDelete)
+          await supabase.storage.from("partners").remove([oldFileToDelete]);
+        toast.success("Informasi mitra diperbarui!", { id: saveToast });
+      } else {
+        await supabase.from("partners").insert([{ name, logo_url: finalUrl }]);
+        toast.success("Mitra berhasil ditambahkan!", { id: saveToast });
+      }
+
+      // 3. PROSES RESET TOTAL
       setName("");
       setFile(null);
-      const fileInput = document.getElementById(
-        "fileInput",
-      ) as HTMLInputElement;
-      if (fileInput) fileInput.value = "";
+      setPreview(null);
+      setEditingPartner(null);
+
+      // Paksa hapus teks nama file di elemen input browser
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
 
       await fetchPartners(true);
-      alert("Mitra berhasil ditambahkan!");
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : "Terjadi kesalahan";
-      alert("Error: " + msg);
+    } catch {
+      toast.error("Gagal melakukan sinkronisasi data.", { id: saveToast });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (id: number, logoUrl: string) => {
-    if (confirm("Hapus mitra ini?")) {
-      const fileName = logoUrl.split("/").pop();
-      if (fileName) {
-        await supabase.storage.from("partners").remove([fileName]);
-      }
-      await supabase.from("partners").delete().eq("id", id);
-      await fetchPartners(true);
-    }
-  };
+  const filteredPartners = useMemo(
+    () =>
+      partners.filter((p) =>
+        p.name.toLowerCase().includes(searchTerm.toLowerCase()),
+      ),
+    [partners, searchTerm],
+  );
 
   return (
-    <div className="space-y-10">
+    <div className="max-w-7xl mx-auto space-y-10 px-4 py-10">
+      <Toaster position="top-right" />
+
       <div className="border-b-2 border-slate-100 pb-8">
         <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">
           Manajemen Mitra
         </h1>
         <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2">
-          Upload Logo Partner Strategis Koperasi
+          Pusat Data Partner Strategis Koperasi
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-        <div className="lg:col-span-1">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10 items-start">
+        <div className="lg:col-span-1 lg:sticky lg:top-10">
           <form
-            onSubmit={handleAddPartner}
+            onSubmit={handleSave}
             className="bg-white p-8 rounded-[2.5rem] border-2 border-slate-100 shadow-sm space-y-6"
           >
             <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">
-              Tambah Mitra Baru
+              {editingPartner
+                ? "Edit Informasi Mitra"
+                : "Pendaftaran Mitra Baru"}
             </h3>
-            <div>
-              <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1 tracking-widest">
-                Nama Perusahaan
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-blue-500 font-bold transition-all placeholder:text-slate-300"
-                placeholder="Nama Mitra"
-                required
-              />
+
+            {preview && (
+              <div className="relative w-full h-36 bg-slate-50 rounded-3xl overflow-hidden border-2 border-slate-100 p-4">
+                <Image
+                  src={preview}
+                  alt="Preview"
+                  fill
+                  className="object-contain"
+                  unoptimized
+                />
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1">
+                  Nama Mitra
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-bold focus:border-blue-500 outline-none transition-all"
+                  placeholder="Input nama resmi..."
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1">
+                  Upload Logo
+                </label>
+                {/* 4. Pasang Ref di sini */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  className="w-full p-3 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl text-[10px] cursor-pointer"
+                />
+              </div>
             </div>
-            <div>
-              <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1 tracking-widest">
-                Pilih Logo Mitra
-              </label>
-              <input
-                id="fileInput"
-                type="file"
-                accept="image/*"
-                onChange={(e) =>
-                  setFile(e.target.files ? e.target.files[0] : null)
-                }
-                className="w-full p-3 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl font-bold text-xs"
-                required
-              />
-            </div>
+
             <button
               disabled={loading}
-              className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg active:scale-95 disabled:opacity-50"
+              className="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all active:scale-95 disabled:opacity-50"
             >
-              {loading ? "Sedang Upload..." : "Simpan Mitra"}
+              {loading
+                ? "Menyimpan..."
+                : editingPartner
+                  ? "Simpan Perubahan"
+                  : "Daftarkan Mitra"}
             </button>
+
+            {editingPartner && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingPartner(null);
+                  setName("");
+                  setPreview(null);
+                  if (fileInputRef.current) fileInputRef.current.value = "";
+                }}
+                className="w-full text-[10px] font-bold text-slate-400 uppercase tracking-widest pt-2"
+              >
+                Batal Edit
+              </button>
+            )}
           </form>
         </div>
 
         <div className="lg:col-span-2 space-y-6">
-          <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest px-2">
-            Daftar Partner Aktif
-          </h3>
-          {partners.length === 0 ? (
-            <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-[2.5rem] p-20 text-center">
-              <p className="text-slate-400 font-bold text-sm uppercase tracking-widest">
-                Belum ada data mitra
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {partners.map((partner) => (
-                <div
-                  key={partner.id}
-                  className="bg-white p-6 rounded-3xl border-2 border-slate-50 shadow-sm flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="relative w-12 h-12 bg-slate-50 rounded-xl overflow-hidden p-2">
-                      <Image
-                        src={partner.logo_url}
-                        alt={partner.name}
-                        fill
-                        className="object-contain"
-                        unoptimized
-                      />
-                    </div>
-                    <div>
-                      <p className="text-sm font-black text-slate-900 leading-none">
-                        {partner.name}
-                      </p>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">
-                        Logo Terupload
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleDelete(partner.id, partner.logo_url)}
-                    className="p-2 text-slate-300 hover:text-red-600 transition-colors"
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-2">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">
+              Daftar Partner Aktif ({partners.length})
+            </h3>
+            <input
+              type="text"
+              placeholder="Cari nama mitra..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="px-5 py-2.5 border-2 border-slate-100 rounded-full text-xs font-bold focus:border-blue-500 outline-none transition-all w-full md:w-64"
+            />
+          </div>
+
+          <div className="max-h-[75vh] overflow-y-auto pr-2 custom-scrollbar grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {fetching ? (
+              Array(6)
+                .fill(0)
+                .map((_, i) => <PartnerSkeleton key={i} />)
+            ) : filteredPartners.length === 0 ? (
+              <div className="col-span-full py-24 text-center bg-slate-50 border-2 border-dashed border-slate-200 rounded-[3rem]">
+                <p className="text-slate-300 font-black text-sm uppercase tracking-widest">
+                  Data Tidak Ditemukan
+                </p>
+              </div>
+            ) : (
+              filteredPartners.map((p) => (
+                <PartnerCard
+                  key={p.id}
+                  partner={p}
+                  onEdit={() => {
+                    setEditingPartner(p);
+                    setName(p.name);
+                    setPreview(p.logo_url);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                  onDelete={async () => {
+                    if (
+                      confirm("Apakah Anda yakin ingin menghapus mitra ini?")
+                    ) {
+                      const deleteToast = toast.loading("Menghapus data...");
+                      try {
+                        const fileName = p.logo_url.split("/").pop();
+                        if (fileName)
+                          await supabase.storage
+                            .from("partners")
+                            .remove([fileName]);
+                        await supabase.from("partners").delete().eq("id", p.id);
+                        toast.success("Mitra telah dihapus!", {
+                          id: deleteToast,
+                        });
+                        await fetchPartners(true);
+                      } catch {
+                        toast.error("Gagal menghapus data.", {
+                          id: deleteToast,
+                        });
+                      }
+                    }
+                  }}
+                />
+              ))
+            )}
+          </div>
         </div>
       </div>
     </div>

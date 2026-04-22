@@ -1,45 +1,82 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 export default function Dashboard() {
-  const [stats, setStats] = useState({ berita: 0, mitra: 0, anggota: 0 });
+  const [stats, setStats] = useState({
+    berita: 0,
+    mitra: 0,
+    anggota: "0",
+    aset: "0",
+    shu: "0",
+  });
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  useEffect(() => {
-    async function getStats() {
-      const [news, partners, members] = await Promise.all([
-        supabase.from("posts").select("*", { count: "exact", head: true }),
-        supabase.from("partners").select("*", { count: "exact", head: true }),
-        supabase
-          .from("site_settings")
-          .select("value")
-          .eq("key", "total_anggota")
-          .single(),
-      ]);
+  const getStats = useCallback(async (isMounted: boolean) => {
+    const [news, partners, settingsData] = await Promise.all([
+      supabase.from("posts").select("*", { count: "exact", head: true }),
+      supabase.from("partners").select("*", { count: "exact", head: true }),
+      supabase
+        .from("site_settings")
+        .select("setting_key, setting_value")
+        .in("setting_key", ["total_anggota", "total_aset", "total_shu"]),
+    ]);
+
+    if (isMounted) {
+      const findVal = (key: string) =>
+        settingsData.data?.find((i) => i.setting_key === key)?.setting_value ||
+        "0";
 
       setStats({
         berita: news.count || 0,
         mitra: partners.count || 0,
-        anggota: parseInt(members.data?.value || "0"),
+        anggota: findVal("total_anggota"),
+        aset: findVal("total_aset"),
+        shu: findVal("total_shu"),
       });
       setLoading(false);
     }
-    getStats();
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      await getStats(isMounted);
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, [getStats]);
+
+  // PERBAIKAN: Fungsi pemformatan cerdas (Smart Formatting)
+  const formatCompact = (val: string) => {
+    const num = parseFloat(val);
+    if (isNaN(num)) return val;
+
+    // Logika Konversi Satuan
+    if (num >= 1_000_000_000_000)
+      return (num / 1_000_000_000_000).toLocaleString("id-ID") + " Triliun";
+    if (num >= 1_000_000_000)
+      return (num / 1_000_000_000).toLocaleString("id-ID") + " Miliar";
+    if (num >= 1_000_000)
+      return (num / 1_000_000).toLocaleString("id-ID") + " Juta";
+    if (num >= 1_000) return (num / 1_000).toLocaleString("id-ID") + " Ribu";
+
+    return num.toLocaleString("id-ID");
+  };
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 lg:py-12 space-y-8 lg:space-y-12">
-      {/* Header - Stacking di Mobile */}
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b-2 border-slate-100 pb-10 mt-10 lg:mt-0">
         <div className="space-y-1">
           <h1 className="text-3xl md:text-5xl font-black text-slate-900 tracking-tighter uppercase leading-none">
-            Panel Eksekutif
+            Dashboard Utama
           </h1>
           <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-[0.3em]">
-            Kopkar Adis Dimension Footwear
+            Ringkasan Operasional Koperasi Adis
           </p>
         </div>
         <div className="bg-emerald-50 border border-emerald-100 px-5 py-3 rounded-2xl flex items-center gap-3 self-start md:self-center">
@@ -50,7 +87,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Grid Manajemen Utama - 1 Kolom di HP */}
+      {/* Grid Manajemen Berita & Mitra */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8">
         {[
           {
@@ -100,35 +137,42 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Statistik Koperasi - Responsive Grid */}
+      {/* Statistik Koperasi: Menggunakan Format Compact */}
       <div className="space-y-6 pt-4">
         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.5em] px-2">
-          Data Statistik
+          Capaian Strategis Koperasi
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-2xl flex flex-col justify-between h-56 relative overflow-hidden group">
-            <div className="relative z-10">
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">
-                Anggota Terdaftar
-              </p>
-              <h4 className="text-5xl font-black tracking-tighter">
-                {loading ? "..." : stats.anggota.toLocaleString()}
-              </h4>
-            </div>
-            <button
-              onClick={() => router.push("/statistik-manager")}
-              className="relative z-10 w-fit text-[10px] font-black text-blue-400 uppercase tracking-widest bg-white/5 px-4 py-2 rounded-full"
+          {[
+            {
+              label: "Anggota Terdaftar",
+              val: stats.anggota,
+              color: "bg-slate-900",
+            },
+            { label: "Total Aset", val: stats.aset, color: "bg-blue-900" },
+            { label: "Total SHU", val: stats.shu, color: "bg-slate-800" },
+          ].map((card, idx) => (
+            <div
+              key={idx}
+              className={`${card.color} p-8 rounded-[2.5rem] text-white shadow-xl flex flex-col justify-between h-56 relative overflow-hidden group`}
             >
-              Update Data →
-            </button>
-          </div>
-          {/* Box Placeholder tetep responsif */}
-          <div className="hidden md:flex bg-white border-2 border-dashed border-slate-200 rounded-[2.5rem] items-center justify-center text-slate-300 font-bold text-xs uppercase tracking-widest">
-            Locked
-          </div>
-          <div className="hidden md:flex bg-white border-2 border-dashed border-slate-200 rounded-[2.5rem] items-center justify-center text-slate-300 font-bold text-xs uppercase tracking-widest">
-            Locked
-          </div>
+              <div className="relative z-10">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                  {card.label}
+                </p>
+                <h4 className="text-4xl lg:text-5xl font-black tracking-tighter leading-tight">
+                  {/* Tampilan angka cerdas dengan satuan */}
+                  {loading ? "..." : formatCompact(card.val)}
+                </h4>
+              </div>
+              <button
+                onClick={() => router.push("/statistik-manager")}
+                className="relative z-10 w-fit text-[10px] font-black text-blue-400 uppercase tracking-widest bg-white/5 px-4 py-2 rounded-full hover:bg-white/10 transition-colors"
+              >
+                Kelola Data →
+              </button>
+            </div>
+          ))}
         </div>
       </div>
     </div>
