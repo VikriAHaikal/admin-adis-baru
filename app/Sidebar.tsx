@@ -1,9 +1,10 @@
 "use client";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useState, Suspense } from "react"; // Tambahkan Suspense di sini
 import { supabase } from "@/lib/supabase";
 
-export default function Sidebar() {
+// 1. Pindahkan semua logika Sidebar lu ke dalam komponen Internal
+function SidebarContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -56,7 +57,6 @@ export default function Sidebar() {
     },
   ];
 
-  // HITUNG OTOMATIS: Cari grup aktif langsung saat render (Tanpa UseEffect)
   const activeGroupFromUrl =
     menuGroups.find((group) =>
       group.items.some((item) => {
@@ -70,7 +70,6 @@ export default function Sidebar() {
       }),
     )?.group || null;
 
-  // Prioritaskan klik manual, kalau tidak ada pakai deteksi URL
   const openGroup = manualOpenGroup ?? activeGroupFromUrl;
 
   const handleLogout = async () => {
@@ -82,6 +81,7 @@ export default function Sidebar() {
 
   return (
     <>
+      {/* Mobile Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-slate-900 flex items-center px-6 z-50 border-b border-slate-800 shadow-md">
         <button
           onClick={() => setIsMobileOpen(true)}
@@ -179,5 +179,14 @@ export default function Sidebar() {
         </button>
       </aside>
     </>
+  );
+}
+
+// 2. Export utama yang membungkus komponen internal dengan Suspense
+export default function Sidebar() {
+  return (
+    <Suspense fallback={<aside className="w-72 bg-slate-900 h-screen" />}>
+      <SidebarContent />
+    </Suspense>
   );
 }
